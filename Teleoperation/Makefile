@@ -1,5 +1,5 @@
-BASE = ../../git/botop/rai
-BASE2 = ../../git/botop
+BASE = ../../../../git/botop/rai
+BASE2 = ../../../../git/botop
 
 DEPEND = KOMO Core Geo Kin Gui Optim
 

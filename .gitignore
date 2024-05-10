@@ -27,3 +27,8 @@ __pycache__/
 data/
 *.pcd
 *.json
+
+
+# Teleoperation images and video folder
+images/
+videos/

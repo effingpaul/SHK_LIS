@@ -4,23 +4,73 @@
 #include <KOMO/komo.h>
 #include <BotOp/bot.h>
 #include <Optim/NLP_Solver.h>
-
 #define BOTH_ARMS 0
+
+arr quaternionRotation(arr q1, arr q2) {
+    arr q = {0., 0., 0., 0.};
+    q.elem(0) = q1.elem(0) * q2.elem(0) - q1.elem(1) * q2.elem(1) - q1.elem(2) * q2.elem(2) - q1.elem(3) * q2.elem(3);
+    q.elem(1) = q1.elem(0) * q2.elem(1) + q1.elem(1) * q2.elem(0) + q1.elem(2) * q2.elem(3) - q1.elem(3) * q2.elem(2);
+    q.elem(2) = q1.elem(0) * q2.elem(2) - q1.elem(1) * q2.elem(3) + q1.elem(2) * q2.elem(0) + q1.elem(3) * q2.elem(1);
+    q.elem(3) = q1.elem(0) * q2.elem(3) + q1.elem(1) * q2.elem(2) - q1.elem(2) * q2.elem(1) + q1.elem(3) * q2.elem(0);
+    return q;
+}
 
 
 void reload_target(rai::Configuration* C, arr target_origin, arr controller_origin, arr rotation_offset, const char* controller, const char* gripper_target) {
     arr controller_quat = C->getFrame(controller)->getQuaternion();
-    auto tmp_quat = controller_quat.elem(1);
-    controller_quat.elem(1) = -controller_quat.elem(2);
-    controller_quat.elem(2) = tmp_quat;
+
+    auto quat_tmp = controller_quat.elem(1);
+    controller_quat.elem(1) = -controller_quat.elem(3);
+    controller_quat.elem(3) = quat_tmp;
+
+    quat_tmp = controller_quat.elem(2);
+    controller_quat.elem(2) = controller_quat.elem(3);
+    controller_quat.elem(3) = -quat_tmp;
+
+
+
+
+
+
+
+    float tmpW = controller_quat.elem(0);
+    float tmpX = controller_quat.elem(1);
+    float tmpY = controller_quat.elem(2);
+    float tmpZ = controller_quat.elem(3);
+
+
+
+
+    // rotate the quaternion so that the coordinate system is rotated around the x axis by 90 degrees
+    // this is necessary because the controller is rotated by 90 degrees around the x axis
+    // this is done by multiplying the quaternion with a quaternion that represents a 90 degree rotation around the x axis
+    arr rotationAroundX = {sqrt(2)/2, 0,  sqrt(2)/2, 0};
+    controller_quat = quaternionRotation(rotationAroundX, controller_quat);
+
+
+
+
+
+
+     //       a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,  // 1
+    //    a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,  // i
+    //    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,  // j
+     //   a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w   // k
+
+    C->getFrame("controller indicator")->setQuaternion(controller_quat);
     C->getFrame(gripper_target)->setQuaternion(controller_quat);
     arr controller_pos = C->getFrame(controller)->getPosition() - controller_origin;
     auto tmp_pos = controller_pos.elem(0);
-    controller_pos.elem(0) = -controller_pos.elem(1);
+    controller_pos.elem(0) = -controller_pos.elem(1); // QUESTION: why this reassignemnt?
     controller_pos.elem(1) = tmp_pos;
-    arr target_pos = target_origin + controller_pos*2;
+    // OWN CODE
+    float SCALING_FACTOR = 2;
+    // END OWN CODE
+    arr target_pos = target_origin + controller_pos*SCALING_FACTOR; // This is the factor to scale the movements
     C->getFrame(gripper_target)->setPosition(target_pos);
 }
+
+bool GRIPPER_CONTROL = false;
 
 int main(int argc,char **argv) {
     rai::initCmdLine(argc, argv);
@@ -31,12 +81,22 @@ int main(int argc,char **argv) {
 
     BotOp bot(C, true);
     bot.home(C);
-    bot.gripperMove(rai::_left, .079);
+    //bot.gripperMove(rai::_left, .079);
     #if BOTH_ARMS
     bot.gripperMove(rai::_right, .079);
     #endif
 
+    // await key input 'k' to proceed
+    cout << "Press enter to start teleoperation" << endl;
+    std::cin.get();
+
+    bot.gripperClose(rai::_left);
+
+
     const char* to_follow = "l_hand";
+    // OWN CODE
+    to_follow = "stick_controller";
+    // END OWN CODE
 
     rai::OptiTrack OT;
     OT.pull(C);
@@ -70,9 +130,13 @@ int main(int argc,char **argv) {
             #endif
 
             l_controller_origin = C.getFrame(to_follow)->getPosition();
+            arr l_controller_quat = C.getFrame(to_follow)->getQuaternion();
             l_target_origin = C.getFrame("l_gripper")->getPosition();
+            arr l_target_quat = C.getFrame("l_gripper")->getQuaternion();
             l_rotation_offset = C.getFrame(to_follow)->getQuaternion();
-            C.addFrame("l_gripper_target")->setPosition(l_target_origin).setShape(rai::ST_marker, {.2});
+            C.addFrame("l_gripper_target")->setPosition(l_target_origin).setShape(rai::ST_marker, {.01});
+            C.addFrame("controller indicator")->setQuaternion(l_controller_quat).setPosition(l_controller_origin).setShape(rai::ST_marker, {.8});
+            C.addFrame("gripper_marker")->setQuaternion(l_target_quat).setPosition(l_target_origin).setShape(rai::ST_marker, {.2});
         }
 
         // Define KOMO problem towards the target waypoint
@@ -119,38 +183,41 @@ int main(int argc,char **argv) {
                     .solve();
                 cout << *ret <<endl;
                 arr q = komo.getPath_qOrg();
-                bot.moveTo(q[0], {5.}, true);
+                bot.moveTo(q[0], {1.}, true); // velo is second param
                 bot.sync(C, 0);
             }
 
-            float l_gripper_pos = .079 - (C.eval(FS_negDistance, {"l_controller", "l_thumb"}).elem(0)+.014) / -.07 * .079;
-            if (l_gripper_pos > .079) l_gripper_pos = .079;
-            if (l_gripper_pos < .0) l_gripper_pos = .0;
-            // std::cout << "Left gripper pos: " << l_gripper_pos << std::endl;
+            #if GRIPPER_CONTROL
 
-            if (l_gripper_closed && l_gripper_pos >= .079*.66) {
-                bot.gripperMove(rai::_left, .079);
-                l_gripper_closed = false;
-            }
-            else if (!l_gripper_closed && l_gripper_pos <= .079*.33) {
-                bot.gripperClose(rai::_left);
-                l_gripper_closed = true;
-            }
+                float l_gripper_pos = .079 - (C.eval(FS_negDistance, {"l_controller", "l_thumb"}).elem(0)+.014) / -.07 * .079; // QUESTION: Where do these numbers come from?
+                if (l_gripper_pos > .079) l_gripper_pos = .079;
+                if (l_gripper_pos < .0) l_gripper_pos = .0;
+                // std::cout << "Left gripper pos: " << l_gripper_pos << std::endl;
 
-            #if BOTH_ARMS
-            float r_gripper_pos = .079 - (C.eval(FS_negDistance, {"r_controller", "r_thumb"}).elem(0)+.014) / -.07 * .079;
-            if (r_gripper_pos > .079) r_gripper_pos = .079;
-            if (r_gripper_pos < .0) r_gripper_pos = .0;
-            std::cout << "Right gripper pos: " << r_gripper_pos << std::endl;
+                if (l_gripper_closed && l_gripper_pos >= .079*.66) {
+                    bot.gripperMove(rai::_left, .079);
+                    l_gripper_closed = false;
+                }
+                else if (!l_gripper_closed && l_gripper_pos <= .079*.33) {
+                    bot.gripperClose(rai::_left);
+                    l_gripper_closed = true;
+                }
 
-            if (r_gripper_closed && r_gripper_pos >= .079*.66) {
-                bot.gripperMove(rai::_right, .079);
-                l_gripper_closed = false;
-            }
-            else if (!r_gripper_closed && r_gripper_pos <= .079*.33) {
-                bot.gripperClose(rai::_right);
-                r_gripper_closed = true;
-            }
+                #if BOTH_ARMS
+                float r_gripper_pos = .079 - (C.eval(FS_negDistance, {"r_controller", "r_thumb"}).elem(0)+.014) / -.07 * .079;
+                if (r_gripper_pos > .079) r_gripper_pos = .079;
+                if (r_gripper_pos < .0) r_gripper_pos = .0;
+                std::cout << "Right gripper pos: " << r_gripper_pos << std::endl;
+
+                if (r_gripper_closed && r_gripper_pos >= .079*.66) {
+                    bot.gripperMove(rai::_right, .079);
+                    l_gripper_closed = false;
+                }
+                else if (!r_gripper_closed && r_gripper_pos <= .079*.33) {
+                    bot.gripperClose(rai::_right);
+                    r_gripper_closed = true;
+                }
+                #endif
             #endif
         }
     }
