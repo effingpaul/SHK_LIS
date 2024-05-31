@@ -13,6 +13,10 @@ arr quaternionRotation(arr q1, arr q2) {
     q.elem(2) = q1.elem(0) * q2.elem(2) - q1.elem(1) * q2.elem(3) + q1.elem(2) * q2.elem(0) + q1.elem(3) * q2.elem(1);
     q.elem(3) = q1.elem(0) * q2.elem(3) + q1.elem(1) * q2.elem(2) - q1.elem(2) * q2.elem(1) + q1.elem(3) * q2.elem(0);
     return q;
+    //       a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,  // 1
+    //    a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,  // i
+    //    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,  // j
+    //   a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w   // k
 }
 
 
@@ -27,19 +31,10 @@ void reload_target(rai::Configuration* C, arr target_origin, arr controller_orig
     controller_quat.elem(2) = controller_quat.elem(3);
     controller_quat.elem(3) = -quat_tmp;
 
-
-
-
-
-
-
     float tmpW = controller_quat.elem(0);
     float tmpX = controller_quat.elem(1);
     float tmpY = controller_quat.elem(2);
     float tmpZ = controller_quat.elem(3);
-
-
-
 
     // rotate the quaternion so that the coordinate system is rotated around the x axis by 90 degrees
     // this is necessary because the controller is rotated by 90 degrees around the x axis
@@ -47,15 +42,7 @@ void reload_target(rai::Configuration* C, arr target_origin, arr controller_orig
     arr rotationAroundX = {sqrt(2)/2, 0,  sqrt(2)/2, 0};
     controller_quat = quaternionRotation(rotationAroundX, controller_quat);
 
-
-
-
-
-
-     //       a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,  // 1
-    //    a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,  // i
-    //    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,  // j
-     //   a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w   // k
+    
 
     C->getFrame("controller indicator")->setQuaternion(controller_quat);
     C->getFrame(gripper_target)->setQuaternion(controller_quat);
@@ -70,7 +57,8 @@ void reload_target(rai::Configuration* C, arr target_origin, arr controller_orig
     C->getFrame(gripper_target)->setPosition(target_pos);
 }
 
-bool GRIPPER_CONTROL = false;
+bool GRIPPER_CONTROL = false; // OWN CODE
+auto VELOCITY = 1.; //OWN CODE
 
 int main(int argc,char **argv) {
     rai::initCmdLine(argc, argv);
@@ -86,12 +74,13 @@ int main(int argc,char **argv) {
     bot.gripperMove(rai::_right, .079);
     #endif
 
+    // OWN CODE
     // await key input 'k' to proceed
     cout << "Press enter to start teleoperation" << endl;
     std::cin.get();
 
     bot.gripperClose(rai::_left);
-
+    // END OWN CODE
 
     const char* to_follow = "l_hand";
     // OWN CODE
@@ -130,13 +119,13 @@ int main(int argc,char **argv) {
             #endif
 
             l_controller_origin = C.getFrame(to_follow)->getPosition();
-            arr l_controller_quat = C.getFrame(to_follow)->getQuaternion();
+            arr l_controller_quat = C.getFrame(to_follow)->getQuaternion(); // OWN CODE FOR VISUALIZATION
             l_target_origin = C.getFrame("l_gripper")->getPosition();
-            arr l_target_quat = C.getFrame("l_gripper")->getQuaternion();
+            arr l_target_quat = C.getFrame("l_gripper")->getQuaternion(); // OWN CODE FOR VISUALIZATION
             l_rotation_offset = C.getFrame(to_follow)->getQuaternion();
             C.addFrame("l_gripper_target")->setPosition(l_target_origin).setShape(rai::ST_marker, {.01});
-            C.addFrame("controller indicator")->setQuaternion(l_controller_quat).setPosition(l_controller_origin).setShape(rai::ST_marker, {.8});
-            C.addFrame("gripper_marker")->setQuaternion(l_target_quat).setPosition(l_target_origin).setShape(rai::ST_marker, {.2});
+            C.addFrame("controller indicator")->setQuaternion(l_controller_quat).setPosition(l_controller_origin).setShape(rai::ST_marker, {.8}); // OWN CODE FOR VISUALIZATION
+            C.addFrame("gripper_marker")->setQuaternion(l_target_quat).setPosition(l_target_origin).setShape(rai::ST_marker, {.2}); // OWN CODE FOR VISUALIZATION
         }
 
         // Define KOMO problem towards the target waypoint
@@ -183,7 +172,7 @@ int main(int argc,char **argv) {
                     .solve();
                 cout << *ret <<endl;
                 arr q = komo.getPath_qOrg();
-                bot.moveTo(q[0], {1.}, true); // velo is second param
+                bot.moveTo(q[0], {VELOCITY}, true); // velo is second param
                 bot.sync(C, 0);
             }
 
