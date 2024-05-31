@@ -59,6 +59,7 @@ void reload_target(rai::Configuration* C, arr target_origin, arr controller_orig
 
 bool GRIPPER_CONTROL = false; // OWN CODE
 auto VELOCITY = 1.; //OWN CODE
+auto FPS = 20; //OWN CODE
 
 int main(int argc,char **argv) {
     rai::initCmdLine(argc, argv);
@@ -75,6 +76,9 @@ int main(int argc,char **argv) {
     #endif
 
     // OWN CODE
+    //init camera
+    CameraRecorder recorder(4, 10, FPS);
+    recorder.init();
     // await key input 'k' to proceed
     cout << "Press enter to start teleoperation" << endl;
     std::cin.get();
@@ -130,6 +134,10 @@ int main(int argc,char **argv) {
 
         // Define KOMO problem towards the target waypoint
         if (activated) {
+
+            auto start = std::chrono::high_resolution_clock::now();
+
+            recorder.recordFrame();
 
             #if BOTH_ARMS
             reload_target(&C, r_target_origin, r_controller_origin, r_rotation_offset, "r_controller", "r_gripper_target");
@@ -208,6 +216,15 @@ int main(int argc,char **argv) {
                 }
                 #endif
             #endif
+
+            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = end - start; //measure time taken for teleoperation
+            double elapsed_time = elapsed.count();
+
+            double sleep_time = (1.0 / FPS) - elapsed_time;
+            if (sleep_time > 0) {
+                std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
+            }
         }
     }
 
