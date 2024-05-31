@@ -79,6 +79,11 @@ int main(int argc,char **argv) {
     //init camera
     CameraRecorder recorder(4, 10, FPS);
     recorder.init();
+
+    // file to write poses to
+    std::ofstream poses_file;
+    poses_file.open("poses.txt");
+
     // await key input 'k' to proceed
     cout << "Press enter to start teleoperation" << endl;
     std::cin.get();
@@ -134,10 +139,17 @@ int main(int argc,char **argv) {
 
         // Define KOMO problem towards the target waypoint
         if (activated) {
-
+            // OWN CODE
             auto start = std::chrono::high_resolution_clock::now();
 
             recorder.recordFrame();
+
+            // immediatly after recording the frame, we log the EE pose
+            arr l_gripper_pos = C.getFrame("l_gripper")->getPosition();
+            arr l_gripper_quat = C.getFrame("l_gripper")->getQuaternion();
+            poses_file << l_gripper_pos << " " << l_gripper_quat << std::endl;
+            
+            // END OWN CODE
 
             #if BOTH_ARMS
             reload_target(&C, r_target_origin, r_controller_origin, r_rotation_offset, "r_controller", "r_gripper_target");
@@ -217,6 +229,7 @@ int main(int argc,char **argv) {
                 #endif
             #endif
 
+            // OWN CODE
             auto end = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed = end - start; //measure time taken for teleoperation
             double elapsed_time = elapsed.count();
@@ -225,6 +238,8 @@ int main(int argc,char **argv) {
             if (sleep_time > 0) {
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }
+
+            //END OWN CODE
         }
     }
 
