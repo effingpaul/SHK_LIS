@@ -4,6 +4,7 @@
 #include <KOMO/komo.h>
 #include <BotOp/bot.h>
 #include <Optim/NLP_Solver.h>
+#include <include/CameraRecorder.h>
 #define BOTH_ARMS 0
 
 arr quaternionRotation(arr q1, arr q2) {
@@ -20,8 +21,17 @@ arr quaternionRotation(arr q1, arr q2) {
 }
 
 
-void reload_target(rai::Configuration* C, arr target_origin, arr controller_origin, arr rotation_offset, const char* controller, const char* gripper_target) {
+void reload_target(rai::Configuration* C, arr target_origin, arr controller_origin, arr rotation_offset, arr target_origin_quat, const char* controller, const char* gripper_target) {
     arr controller_quat = C->getFrame(controller)->getQuaternion();
+
+    
+
+    //auto quat_tmp = controller_quat.elem(1);
+    //controller_quat.elem(1) = controller_quat.elem(3);
+    //controller_quat.elem(3) = -quat_tmp;
+
+    
+    //controller_quat -= rotation_offset;
 
     auto quat_tmp = controller_quat.elem(1);
     controller_quat.elem(1) = -controller_quat.elem(3);
@@ -31,16 +41,25 @@ void reload_target(rai::Configuration* C, arr target_origin, arr controller_orig
     controller_quat.elem(2) = controller_quat.elem(3);
     controller_quat.elem(3) = -quat_tmp;
 
-    float tmpW = controller_quat.elem(0);
-    float tmpX = controller_quat.elem(1);
-    float tmpY = controller_quat.elem(2);
-    float tmpZ = controller_quat.elem(3);
-
-    // rotate the quaternion so that the coordinate system is rotated around the x axis by 90 degrees
-    // this is necessary because the controller is rotated by 90 degrees around the x axis
-    // this is done by multiplying the quaternion with a quaternion that represents a 90 degree rotation around the x axis
-    arr rotationAroundX = {sqrt(2)/2, 0,  sqrt(2)/2, 0};
+    //controller_quat += target_origin_quat;
+//
+    //// flip z axis
+    ////quat_tmp = controller_quat.elem(0);
+    ////controller_quat.elem(3) = -controller_quat.elem(3);
+    ////controller_quat.elem(3) = quat_tmp;
+//
+//
+    //float tmpW = controller_quat.elem(0);
+    //float tmpX = controller_quat.elem(1);
+    //float tmpY = controller_quat.elem(2);
+    //float tmpZ = controller_quat.elem(3);
+//
+    //// rotate the quaternion so that the coordinate system is rotated around the x axis by -90 degrees
+    //// this is necessary because the controller is rotated by -90 degrees around the x axis
+    //// this is done by multiplying the quaternion with a quaternion that represents a -90 degree rotation around the x axis
+    arr rotationAroundX = {-sqrt(2)/2, 0,  -sqrt(2)/2, 0};
     controller_quat = quaternionRotation(rotationAroundX, controller_quat);
+
 
     
 
@@ -51,17 +70,19 @@ void reload_target(rai::Configuration* C, arr target_origin, arr controller_orig
     controller_pos.elem(0) = -controller_pos.elem(1); // QUESTION: why this reassignemnt?
     controller_pos.elem(1) = tmp_pos;
     // OWN CODE
-    float SCALING_FACTOR = 2;
+    float SCALING_FACTOR = 1;
     // END OWN CODE
     arr target_pos = target_origin + controller_pos*SCALING_FACTOR; // This is the factor to scale the movements
     C->getFrame(gripper_target)->setPosition(target_pos);
 }
 
 bool GRIPPER_CONTROL = false; // OWN CODE
-auto VELOCITY = 1.; //OWN CODE
+auto VELOCITY = .5; //OWN CODE
 auto FPS = 20; //OWN CODE
+auto CAMERA_PORT = 4; //OWN CODE
 
 int main(int argc,char **argv) {
+
     rai::initCmdLine(argc, argv);
 
     rai::Configuration C;
@@ -76,13 +97,19 @@ int main(int argc,char **argv) {
     #endif
 
     // OWN CODE
+    // create folder with timestamp name
+    auto timestamp = std::chrono::system_clock::now();
+    std::string folder_name = "recordings_" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(timestamp.time_since_epoch()).count());
+    std::filesystem::create_directory(folder_name);
+
     //init camera
-    CameraRecorder recorder(4, 10, FPS);
+    CameraRecorder recorder(4, -1, FPS, folder_name); // camera port, second camera port, FPS
     recorder.init();
+    auto frameNumber = 1;
 
     // file to write poses to
     std::ofstream poses_file;
-    poses_file.open("poses.txt");
+    poses_file.open(folder_name + "/poses.txt");
 
     // await key input 'k' to proceed
     cout << "Press enter to start teleoperation" << endl;
@@ -112,6 +139,7 @@ int main(int argc,char **argv) {
     arr l_controller_origin = arr{0., 0., 0.};
     arr l_target_origin = arr{0., 0., 0.};
     arr l_rotation_offset = arr{0., 0., 0., 1.};
+    arr l_target_origin_quat = arr{0., 0., 0., 1.};
 
     while(1) {
         OT.pull(C);
@@ -126,10 +154,11 @@ int main(int argc,char **argv) {
             r_rotation_offset = C.getFrame("r_controller")->getQuaternion();
             C.addFrame("r_gripper_target")->setPosition(r_target_origin).setShape(rai::ST_marker, {.2});
             #endif
-
+            // bot.get_q(); // 7D joint angle vector
             l_controller_origin = C.getFrame(to_follow)->getPosition();
             arr l_controller_quat = C.getFrame(to_follow)->getQuaternion(); // OWN CODE FOR VISUALIZATION
             l_target_origin = C.getFrame("l_gripper")->getPosition();
+            l_target_origin_quat = C.getFrame("l_gripper")->getQuaternion();
             arr l_target_quat = C.getFrame("l_gripper")->getQuaternion(); // OWN CODE FOR VISUALIZATION
             l_rotation_offset = C.getFrame(to_follow)->getQuaternion();
             C.addFrame("l_gripper_target")->setPosition(l_target_origin).setShape(rai::ST_marker, {.01});
@@ -142,9 +171,10 @@ int main(int argc,char **argv) {
             // OWN CODE
             auto start = std::chrono::high_resolution_clock::now();
 
-            recorder.recordFrame();
+            recorder.recordFrame(frameNumber++);
 
             // immediatly after recording the frame, we log the EE pose
+            // print hello world
             arr l_gripper_pos = C.getFrame("l_gripper")->getPosition();
             arr l_gripper_quat = C.getFrame("l_gripper")->getQuaternion();
             poses_file << l_gripper_pos << " " << l_gripper_quat << std::endl;
@@ -154,7 +184,7 @@ int main(int argc,char **argv) {
             #if BOTH_ARMS
             reload_target(&C, r_target_origin, r_controller_origin, r_rotation_offset, "r_controller", "r_gripper_target");
             #endif
-            reload_target(&C, l_target_origin, l_controller_origin, l_rotation_offset, to_follow, "l_gripper_target");
+            reload_target(&C, l_target_origin, l_controller_origin, l_rotation_offset, l_target_origin_quat, to_follow, "l_gripper_target");
 
             KOMO komo(C, 1., 1, 2, true);
             komo.addControlObjective({}, 0, 1e1);

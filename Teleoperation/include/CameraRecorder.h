@@ -1,4 +1,5 @@
 #include <opencv2/opencv.hpp>
+#include <opencv2/opencv_modules.hpp>
 #include <opencv2/highgui.hpp>
 #include <iostream>
 #include <vector>
@@ -8,17 +9,18 @@
 
 class CameraRecorder {
 public:
-    CameraRecorder(int cam1, int cam2, int fps);
+    CameraRecorder(int cam1, int cam2, int fps, std::string folderName);
     ~CameraRecorder();
 
     void init();
-    void recordFrame();
+    void recordFrame(int index);
     void finalize();
 
 private:
     int camIndex1;
     int camIndex2;
     int fps;
+    std::string folderName;
     double timeForEachFrame;
     cv::VideoCapture cap1;
     cv::VideoCapture cap2;
@@ -26,6 +28,7 @@ private:
     std::vector<cv::Mat> frames2;
     cv::VideoWriter out1;
     cv::VideoWriter out2;
+    cv::VideoWriter outFrame;
     std::string videoFolder;
     std::string imageFolder;
 };
