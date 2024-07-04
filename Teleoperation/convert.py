@@ -1,6 +1,15 @@
 # read the images from a specified recordings folder and read the label files as well
 # convert the images to a numpy array 
 
+
+# INSTRCUTIONS:
+# first record a trajectory with the cpp code in SHK_LIS/Teleoperation
+
+# activate conda environment fish
+# then convert the data to a pickled file with SHK_LIS/Teleoperation/convert.py
+
+# copy the resulting expert_demos.pkl to the expert_demos folder in the FISH folder
+
 import os
 import numpy as np
 import pickle

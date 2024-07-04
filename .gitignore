@@ -32,5 +32,5 @@ data/
 
 
 # Teleoperation images and video folder
-images/
+# images/
 videos/
