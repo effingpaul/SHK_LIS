@@ -324,9 +324,9 @@ def read_pickled_data(folder_path):
 if __name__ == "__main__":
     folder_path = "recordings_1717521458"
     num_frames = get_number_of_frames(folder_path)
-    startFrame = 15
+    startFrame = 22
     endFrame = 320
-    summarize_frames = 1 # this is the number of frames that are combined to one label (all the n labels are added up while the first image is the input)
+    summarize_frames = 8 # this is the number of frames that are combined to one label (all the n labels are added up while the first image is the input)
 
     startFrame = min(startFrame, num_frames)
     endFrame = min(endFrame, num_frames)

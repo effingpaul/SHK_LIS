@@ -13,7 +13,7 @@ public:
     ~CameraRecorder();
 
     void init();
-    void recordFrame(int index);
+    void recordFrame(int index, bool saveImg);
     void finalize();
 
 private:

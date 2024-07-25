@@ -1,109 +1,162 @@
+#include <chrono>
 #include <iostream>
 #include <OptiTrack/optitrack.h>
 #include <Core/graph.h>
 #include <KOMO/komo.h>
 #include <BotOp/bot.h>
 #include <Optim/NLP_Solver.h>
+#include <include/gamepad.h>
 #include <include/CameraRecorder.h>
-#define BOTH_ARMS 0
 
-arr quaternionRotation(arr q1, arr q2) {
-    arr q = {0., 0., 0., 0.};
-    q.elem(0) = q1.elem(0) * q2.elem(0) - q1.elem(1) * q2.elem(1) - q1.elem(2) * q2.elem(2) - q1.elem(3) * q2.elem(3);
-    q.elem(1) = q1.elem(0) * q2.elem(1) + q1.elem(1) * q2.elem(0) + q1.elem(2) * q2.elem(3) - q1.elem(3) * q2.elem(2);
-    q.elem(2) = q1.elem(0) * q2.elem(2) - q1.elem(1) * q2.elem(3) + q1.elem(2) * q2.elem(0) + q1.elem(3) * q2.elem(1);
-    q.elem(3) = q1.elem(0) * q2.elem(3) + q1.elem(1) * q2.elem(2) - q1.elem(2) * q2.elem(1) + q1.elem(3) * q2.elem(0);
-    return q;
-    //       a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,  // 1
-    //    a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,  // i
-    //    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,  // j
-    //   a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w   // k
+#define USE_BOTH_ARMS 0 // USING BOTH ARMS IS STILL NOT WORKING PERFECTLY, USE AT OWN RISK!!!
+#define TRANSLATION_SCALE 1
+
+
+struct TrackingData {
+    bool gripper_closed = false;
+    std::string controller_frame;
+    arr controller_origin;
+    arr target_origin;
+    rai::Quaternion rotation_offset;
+    std::string target_frame;
+};
+
+void reload_target(rai::Configuration* C, TrackingData arm, bool keep_pos=false) {
+    // Update position
+    arr controller_pos;
+    if (keep_pos) {
+        controller_pos = arr{0., 0., 0.};
+    } else {
+        controller_pos = C->getFrame(arm.controller_frame.c_str())->getPosition() - arm.controller_origin;
+    }
+    arr target_pos = arm.target_origin + controller_pos*TRANSLATION_SCALE;
+    C->getFrame(arm.target_frame.c_str())->setPosition(target_pos);
+
+    // Update rotation
+    rai::Quaternion controller_quat(C->getFrame(arm.controller_frame.c_str())->getQuaternion());
+    controller_quat.append(arm.rotation_offset);
+    C->getFrame(arm.target_frame.c_str())->setQuaternion(controller_quat.getArr4d());
 }
 
-
-void reload_target(rai::Configuration* C, arr target_origin, arr controller_origin, arr rotation_offset, arr target_origin_quat, const char* controller, const char* gripper_target) {
-    arr controller_quat = C->getFrame(controller)->getQuaternion();
-
-    
-
-    //auto quat_tmp = controller_quat.elem(1);
-    //controller_quat.elem(1) = controller_quat.elem(3);
-    //controller_quat.elem(3) = -quat_tmp;
-
-    
-    //controller_quat -= rotation_offset;
-
-    auto quat_tmp = controller_quat.elem(1);
-    controller_quat.elem(1) = -controller_quat.elem(3);
-    controller_quat.elem(3) = quat_tmp;
-
-    quat_tmp = controller_quat.elem(2);
-    controller_quat.elem(2) = controller_quat.elem(3);
-    controller_quat.elem(3) = -quat_tmp;
-
-    //controller_quat += target_origin_quat;
-//
-    //// flip z axis
-    ////quat_tmp = controller_quat.elem(0);
-    ////controller_quat.elem(3) = -controller_quat.elem(3);
-    ////controller_quat.elem(3) = quat_tmp;
-//
-//
-    //float tmpW = controller_quat.elem(0);
-    //float tmpX = controller_quat.elem(1);
-    //float tmpY = controller_quat.elem(2);
-    //float tmpZ = controller_quat.elem(3);
-//
-    //// rotate the quaternion so that the coordinate system is rotated around the x axis by -90 degrees
-    //// this is necessary because the controller is rotated by -90 degrees around the x axis
-    //// this is done by multiplying the quaternion with a quaternion that represents a -90 degree rotation around the x axis
-    arr rotationAroundX = {-sqrt(2)/2, 0,  -sqrt(2)/2, 0};
-    controller_quat = quaternionRotation(rotationAroundX, controller_quat);
-
-
-    
-
-    C->getFrame("controller indicator")->setQuaternion(controller_quat);
-    C->getFrame(gripper_target)->setQuaternion(controller_quat);
-    arr controller_pos = C->getFrame(controller)->getPosition() - controller_origin;
-    auto tmp_pos = controller_pos.elem(0);
-    controller_pos.elem(0) = -controller_pos.elem(1); // QUESTION: why this reassignemnt?
-    controller_pos.elem(1) = tmp_pos;
-    // OWN CODE
-    float SCALING_FACTOR = 1;
-    // END OWN CODE
-    arr target_pos = target_origin + controller_pos*SCALING_FACTOR; // This is the factor to scale the movements
-    C->getFrame(gripper_target)->setPosition(target_pos);
+void update_gripper(bool* gripper_closed, bool button_pressed, rai::ArgWord which_gripper, BotOp* bot)
+{
+    if (button_pressed) {
+        if (*gripper_closed && bot->gripperDone(which_gripper)) {
+            bot->gripperMove(which_gripper, .079);
+            *gripper_closed = false;
+        }
+        else if (!*gripper_closed && bot->gripperDone(which_gripper)) {
+            bot->gripperClose(which_gripper);
+            *gripper_closed = true;
+        }
+    }
 }
 
-bool GRIPPER_CONTROL = false; // OWN CODE
-auto VELOCITY = .5; //OWN CODE
-auto FPS = 20; //OWN CODE
-auto CAMERA_PORT = 4; //OWN CODE
+void reload_target_based_on_input(rai::Configuration* C, int controller_id, TrackingData* arm, const char* endeffector, GamepadInterface* G)
+{
+    if (G->getButtonPressed(controller_id)==BTN_B)
+    {
+        // Keep current translation
+        reload_target(C, *arm, true);
+        return;
+    }
+    else if (G->getButtonPressed(controller_id)==BTN_X)
+    {
+        // Keep current rotation
+        rai::Quaternion controller_quat(C->getFrame(arm->controller_frame.c_str())->getQuaternion());
+        arm->rotation_offset = controller_quat.invert();
+        rai::Quaternion initial_gripper_rot(C->getFrame(endeffector)->getQuaternion());
+        arm->rotation_offset.append(initial_gripper_rot);
+    }
+    reload_target(C, *arm);
+}
 
-int main(int argc,char **argv) {
+bool is_move_button_pressed(GamepadInterface* G, int controller_id) {
+    return (G->getButtonPressed(controller_id)==BTN_A ||
+            G->getButtonPressed(controller_id)==BTN_B ||
+            G->getButtonPressed(controller_id)==BTN_X);
+}
 
-    rai::initCmdLine(argc, argv);
+void reset_data(TrackingData* arm, const char* endeffector, rai::Configuration* C)
+{
+    arm->controller_origin = C->getFrame(arm->controller_frame.c_str())->getPosition();
+    arm->target_origin = C->getFrame(endeffector)->getPosition(); 
+    rai::Quaternion controller_quat(C->getFrame(arm->controller_frame.c_str())->getQuaternion());
+    arm->rotation_offset = controller_quat.invert();
+    rai::Quaternion initial_gripper_rot(C->getFrame(endeffector)->getQuaternion());
+    arm->rotation_offset.append(initial_gripper_rot);
+}
 
+int main(int argc,char **argv)
+{
+
+    // Timing
+    const double delta = .2; // Timestep size for spline generation
+    //OWN CODE
+    auto CAMERA_PORT = 4; //OWN CODE
+    const int FPS = 20; // Desired frequency in frames per second
+    const double tau = 1./FPS; // Desired time between frames
+    //OWN CODE END
+    const std::chrono::milliseconds interval(static_cast<int>(1000.0 * tau));
+
+    // Config
     rai::Configuration C;
-    C.addFile(rai::raiPath("../rai-robotModels/scenarios/pandaSingle.g"));
+    #if USE_BOTH_ARMS
+        C.addFile(rai::raiPath("../rai-robotModels/scenarios/pandasTable.g"));
+    #else
+        C.addFile(rai::raiPath("../rai-robotModels/scenarios/pandaSingle.g"));
+    #endif
     C.view(false);
 
+    // Bot
     BotOp bot(C, true);
     bot.home(C);
-    //bot.gripperMove(rai::_left, .079);
-    #if BOTH_ARMS
-    bot.gripperMove(rai::_right, .079);
+    bot.gripperMove(rai::_left, .079);
+    #if USE_BOTH_ARMS
+        bot.gripperMove(rai::_right, .079);
     #endif
 
+    arr qHome = {-0.276413, 0.251156, -0.393057, -1.67559, 0.630542, 1.55408, 0.0252891}; //from an old recorded trajectory
+    bot.moveTo({qHome}, {3.}, true);
+
+    while(bot.getTimeToEnd()>0.){
+        bot.sync(C,0);
+    }
+    bot.sync(C, 0);
+
+    arr last_komo = bot.get_q();
+    arr q_dot_ref = bot.get_qDot();
+
+
+    // move to this EE pose
+    // [0.243944, 0.326473, 1.02048] [-0.951066, -0.044951, -0.305564, 0.00908615]
+
+    // C.addFrame("home_dummy")->setShape(rai::ST_marker, {.1});
+    // C.getFrame("home_dummy")->setPosition({0.243944, 0.326473, 1.02048});
+    // C.getFrame("home_dummy")->setQuaternion({-0.951066, -0.044951, -0.305564, 0.00908615});
+    // KOMO komo(C, 1., 1, 2, true);
+    // 
+    // komo.setConfig(C, true);
+    // komo.setTiming(1, 1, 1, 0);
+    // komo.addObjective({}, FS_accumulatedCollisions, {}, OT_eq, {1e1});
+    // komo.addObjective({}, FS_jointLimits, {}, OT_ineq, {1e1});
+    // komo.addObjective({}, FS_qItself, {}, OT_sos, {1e-1}, qHome);                  
+    // komo.addObjective({1.}, FS_positionDiff, {"l_gripper", "home_dummy"}, OT_eq, {1e1});
+    // komo.addObjective({1.}, FS_quaternionDiff, {"l_gripper", "home_dummy"}, OT_eq, {1e1});
+    // auto ret = NLP_Solver(komo.nlp(), 0).solve();
+    // arr q = komo.getPath_qOrg();
+    // // print q 
+    // cout << q << endl;
+
     // OWN CODE
+    // INITIALIZE RECORDING STUFF
     // create folder with timestamp name
     auto timestamp = std::chrono::system_clock::now();
     std::string folder_name = "recordings_" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(timestamp.time_since_epoch()).count());
     std::filesystem::create_directory(folder_name);
 
     //init camera
-    CameraRecorder recorder(4, -1, FPS, folder_name); // camera port, second camera port, FPS
+    CameraRecorder recorder(CAMERA_PORT, -1, FPS, folder_name); // camera port, second camera port, FPS
     recorder.init();
     auto frameNumber = 1;
 
@@ -118,160 +171,160 @@ int main(int argc,char **argv) {
     bot.gripperClose(rai::_left);
     // END OWN CODE
 
-    const char* to_follow = "l_hand";
-    // OWN CODE
-    to_follow = "stick_controller";
-    // END OWN CODE
 
+    // Mocap
+    std::cout << "Initializing mocap...";
     rai::OptiTrack OT;
     OT.pull(C);
+    std::cout << "Done.\n";
 
-    bool activated = false;
-    bool l_gripper_closed = false;
-    // bool r_gripper_closed = false;
-
-    #if BOTH_ARMS
-    arr r_controller_origin = arr{0., 0., 0.};
-    arr r_target_origin = arr{0., 0., 0.};
-    arr r_rotation_offset = arr{0., 0., 0., 1.};
+    // Tracking data
+    TrackingData l_arm;
+    l_arm.controller_frame = "l_gamepad";
+    l_arm.target_frame = "l_gripper_target";
+    C.addFrame("l_gripper_target")->setShape(rai::ST_marker, {.1})
+        .setPosition(C.getFrame("l_gripper")->getPosition());
+    #if USE_BOTH_ARMS
+        TrackingData r_arm;
+        r_arm.controller_frame = "r_gamepad";
+        r_arm.target_frame = "r_gripper_target";
+        C.addFrame("r_gripper_target")->setShape(rai::ST_marker, {.1})
+            .setPosition(C.getFrame("r_gripper")->getPosition());
     #endif
-
-    arr l_controller_origin = arr{0., 0., 0.};
-    arr l_target_origin = arr{0., 0., 0.};
-    arr l_rotation_offset = arr{0., 0., 0., 1.};
-    arr l_target_origin_quat = arr{0., 0., 0., 1.};
-
-    while(1) {
-        OT.pull(C);
-
-        if(C.view(false)=='q') break;
-        if (C.view(false)=='k' && !activated) {
-            activated = true;
-
-            #if BOTH_ARMS
-            r_controller_origin = C.getFrame("r_controller")->getPosition();
-            r_target_origin = C.getFrame("r_gripper")->getPosition();
-            r_rotation_offset = C.getFrame("r_controller")->getQuaternion();
-            C.addFrame("r_gripper_target")->setPosition(r_target_origin).setShape(rai::ST_marker, {.2});
-            #endif
-            // bot.get_q(); // 7D joint angle vector
-            l_controller_origin = C.getFrame(to_follow)->getPosition();
-            arr l_controller_quat = C.getFrame(to_follow)->getQuaternion(); // OWN CODE FOR VISUALIZATION
-            l_target_origin = C.getFrame("l_gripper")->getPosition();
-            l_target_origin_quat = C.getFrame("l_gripper")->getQuaternion();
-            arr l_target_quat = C.getFrame("l_gripper")->getQuaternion(); // OWN CODE FOR VISUALIZATION
-            l_rotation_offset = C.getFrame(to_follow)->getQuaternion();
-            C.addFrame("l_gripper_target")->setPosition(l_target_origin).setShape(rai::ST_marker, {.01});
-            C.addFrame("controller indicator")->setQuaternion(l_controller_quat).setPosition(l_controller_origin).setShape(rai::ST_marker, {.8}); // OWN CODE FOR VISUALIZATION
-            C.addFrame("gripper_marker")->setQuaternion(l_target_quat).setPosition(l_target_origin).setShape(rai::ST_marker, {.2}); // OWN CODE FOR VISUALIZATION
+    
+    // Gamepad
+    GamepadInterface G;
+    if (G.count == 0) {
+        std::cout << "No controller found! Shutting down..." << std::endl;
+        return -1;
+    }
+    std::cout << "Waiting for Gamepad thread...";
+    G.gamepadState[0].waitForNextRevision();
+    #if USE_BOTH_ARMS
+        if (G.count < 2) {
+            std::cout << "A controller is missing for usage of both arms!" << std::endl;
+            return -1;
         }
+        G.gamepadState[1].waitForNextRevision();
+    #endif
+    std::cout << "Done.\n";
 
-        // Define KOMO problem towards the target waypoint
-        if (activated) {
-            // OWN CODE
-            auto start = std::chrono::high_resolution_clock::now();
 
-            recorder.recordFrame(frameNumber++);
 
-            // immediatly after recording the frame, we log the EE pose
-            // print hello world
+    while(1)
+    {
+        OT.pull(C);
+        if(C.view(false)=='q' || G.quitSignal.get()) break;
+
+        auto moving = false;
+        // OWN CODE
+        if (is_move_button_pressed(&G, 0)){
+            moving = true;
+        }
+        // END OWN CODE
+
+
+        auto loop_start = std::chrono::steady_clock::now();
+        // OWN CODE
+        recorder.recordFrame(frameNumber++, moving);
+        // immediatly after recording the frame, we log the EE pose
+        // print hello world
+        if (moving){
             arr l_gripper_pos = C.getFrame("l_gripper")->getPosition();
             arr l_gripper_quat = C.getFrame("l_gripper")->getQuaternion();
             poses_file << l_gripper_pos << " " << l_gripper_quat << std::endl;
-            
-            // END OWN CODE
+        }
+        // END OWN CODE
 
-            #if BOTH_ARMS
-            reload_target(&C, r_target_origin, r_controller_origin, r_rotation_offset, "r_controller", "r_gripper_target");
+
+        if (-C.eval(FS_negDistance, {"l_gripper", "l_gripper_target"}).elem(0) > .2
+                #if USE_BOTH_ARMS
+                    || -C.eval(FS_negDistance, {"r_gripper", "r_gripper_target"}).elem(0) > .2
+                #endif
+        ) {
+            // Safety measure: Don't move if the target possition is too far away
+            bot.stop(C);
+            reset_data(&l_arm, "l_gripper", &C);
+            #if USE_BOTH_ARMS
+                reset_data(&r_arm, "r_gripper", &C);
             #endif
-            reload_target(&C, l_target_origin, l_controller_origin, l_rotation_offset, l_target_origin_quat, to_follow, "l_gripper_target");
+            std::cout << "Safety measure activated! Robot did not follow target.\n";
+        }
+        else if (is_move_button_pressed(&G, 0)
+                #if USE_BOTH_ARMS
+                    || is_move_button_pressed(&G, 1)
+                #endif
+        ) {
 
             KOMO komo(C, 1., 1, 2, true);
-            komo.addControlObjective({}, 0, 1e1);
-            komo.addControlObjective({}, 1, .1);
-            komo.addControlObjective({}, 2, .1);
-            komo.addObjective({}, FS_accumulatedCollisions, {}, OT_eq, {1e10});
-            komo.addObjective({}, FS_jointLimits, {}, OT_ineq, {1e0});
+            
+            komo.setConfig(C, true);
+            komo.setTiming(1, 1, 1, 0);
+            komo.addObjective({}, FS_accumulatedCollisions, {}, OT_eq, {1e1});
+            komo.addObjective({}, FS_jointLimits, {}, OT_ineq, {1e1});
 
-            bool l_should_translate = -C.eval(FS_negDistance, {"l_gripper", "l_gripper_target"}).elem(0) > .01;
-            if (l_should_translate) {
-                komo.addObjective({1.}, FS_positionDiff, {"l_gripper", "l_gripper_target"}, OT_eq, {1e1});
-            } else {
-                komo.addObjective({}, FS_position, {"l_gripper"}, OT_eq, {1e1}, C.getFrame("l_gripper")->getPosition());
-            }
+            komo.addObjective({}, FS_qItself, {}, OT_sos, {1e-1}, qHome);            
+            komo.addObjective({}, FS_qItself, {}, OT_sos, {1e0}, last_komo);            
 
-            #if BOTH_ARMS
-            bool r_should_translate = -C.eval(FS_negDistance, {"r_gripper", "r_gripper_target"}).elem(0) > .01;
-            if (r_should_translate) {
-                komo.addObjective({1.}, FS_positionDiff, {"r_gripper", "r_gripper_target"}, OT_eq, {1e1});
-            } else {
-                komo.addObjective({}, FS_position, {"r_gripper"}, OT_eq, {1e1}, C.getFrame("r_gripper")->getPosition());
-            }
-            #else
-            bool r_should_translate = false;
-            #endif
-
-            #if BOTH_ARMS
-            komo.addObjective({1.}, FS_quaternionDiff, {"r_gripper", "r_gripper_target"}, OT_eq, {1e1});
-            #endif
+            komo.addObjective({1.}, FS_positionDiff, {"l_gripper", "l_gripper_target"}, OT_eq, {1e1});
             komo.addObjective({1.}, FS_quaternionDiff, {"l_gripper", "l_gripper_target"}, OT_eq, {1e1});
 
-            if (r_should_translate || l_should_translate) {
-                auto ret = NLP_Solver()
-                    .setProblem(komo.nlp())
-                    .solve();
-                cout << *ret <<endl;
-                arr q = komo.getPath_qOrg();
-                bot.moveTo(q[0], {VELOCITY}, true); // velo is second param
-                bot.sync(C, 0);
-            }
-
-            #if GRIPPER_CONTROL
-
-                float l_gripper_pos = .079 - (C.eval(FS_negDistance, {"l_controller", "l_thumb"}).elem(0)+.014) / -.07 * .079; // QUESTION: Where do these numbers come from?
-                if (l_gripper_pos > .079) l_gripper_pos = .079;
-                if (l_gripper_pos < .0) l_gripper_pos = .0;
-                // std::cout << "Left gripper pos: " << l_gripper_pos << std::endl;
-
-                if (l_gripper_closed && l_gripper_pos >= .079*.66) {
-                    bot.gripperMove(rai::_left, .079);
-                    l_gripper_closed = false;
-                }
-                else if (!l_gripper_closed && l_gripper_pos <= .079*.33) {
-                    bot.gripperClose(rai::_left);
-                    l_gripper_closed = true;
-                }
-
-                #if BOTH_ARMS
-                float r_gripper_pos = .079 - (C.eval(FS_negDistance, {"r_controller", "r_thumb"}).elem(0)+.014) / -.07 * .079;
-                if (r_gripper_pos > .079) r_gripper_pos = .079;
-                if (r_gripper_pos < .0) r_gripper_pos = .0;
-                std::cout << "Right gripper pos: " << r_gripper_pos << std::endl;
-
-                if (r_gripper_closed && r_gripper_pos >= .079*.66) {
-                    bot.gripperMove(rai::_right, .079);
-                    l_gripper_closed = false;
-                }
-                else if (!r_gripper_closed && r_gripper_pos <= .079*.33) {
-                    bot.gripperClose(rai::_right);
-                    r_gripper_closed = true;
-                }
-                #endif
+            #if USE_BOTH_ARMS
+                komo.addObjective({1.}, FS_positionDiff, {"r_gripper", "r_gripper_target"}, OT_eq, {1e1});
+                komo.addObjective({1.}, FS_quaternionDiff, {"r_gripper", "r_gripper_target"}, OT_eq, {1e1});
             #endif
 
-            // OWN CODE
-            auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed = end - start; //measure time taken for teleoperation
-            double elapsed_time = elapsed.count();
+            auto ret = NLP_Solver(komo.nlp(), 0).solve();
 
-            double sleep_time = (1.0 / FPS) - elapsed_time;
-            if (sleep_time > 0) {
-                std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
-            }
+            arr q = komo.getPath_qOrg();
+            arr q_dot_ref = (q[0]-last_komo)/tau;
 
-            //END OWN CODE
+            arr q_atdelta = q[0] + delta*q_dot_ref;
+            arr q_at2delta = q[0] + 2.*delta*q_dot_ref;  
+            arr q_at10delta = q[0] + 5.*delta*q_dot_ref;  
+            
+            double overwrite_time = bot.get_t();
+            bot.move((q_atdelta, q_at2delta, q_at10delta).reshape(-1, q[0].N), {delta, 2.*delta, 10.*delta}, true, overwrite_time);
+            bot.move((q_atdelta, q_at2delta).reshape(-1, q[0].N), {1.5*delta, 4.*delta}, true, overwrite_time);
+            bot.move(q_at2delta.reshape(-1, q[0].N), {4.*delta}, true, overwrite_time);
+            last_komo = q[0];
+            bot.sync(C, 0);
+        }
+        else if (G.getButtonPressed(0)==BTN_Y
+                    #if USE_BOTH_ARMS
+                        || G.getButtonPressed(1)==BTN_Y
+                    #endif
+        ) {
+            bot.home(C);
+            last_komo = bot.get_q();
+        }
+        else
+        {
+            bot.stop(C);
+            reset_data(&l_arm, "l_gripper", &C);
+            #if USE_BOTH_ARMS
+                reset_data(&r_arm, "r_gripper", &C);
+            #endif
+        }
+
+         // Reset translation and rotation offsets for the target frame if no movement command
+
+        reload_target_based_on_input(&C, 0, &l_arm, "l_gripper", &G);
+        #if USE_BOTH_ARMS
+            reload_target_based_on_input(&C, 1, &r_arm, "r_gripper", &G);
+        #endif
+
+        update_gripper(&l_arm.gripper_closed, G.getButtonPressed(0)==BTN_R, rai::_left, &bot);
+        #if USE_BOTH_ARMS
+            update_gripper(&r_arm.gripper_closed, G.getButtonPressed(1)==BTN_R, rai::_right, &bot);
+        #endif
+
+        auto loop_end = std::chrono::steady_clock::now();
+        std::chrono::duration<double, std::milli> elapsed_time = loop_end - loop_start;
+        auto sleep_duration = interval - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed_time);
+        if (sleep_duration.count() > 0) {
+            std::this_thread::sleep_for(sleep_duration);
         }
     }
-
     return 0;
 }

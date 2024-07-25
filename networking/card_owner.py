@@ -15,6 +15,7 @@ def process_client_inputs(model, verbose: int=0):
             print(f"Received request: {client_input}")
 
         output = client_input * 2
+        # output = model.predict(client_input)
         to_send = pickle.dumps(output)
         socket.send(to_send)
         if verbose:

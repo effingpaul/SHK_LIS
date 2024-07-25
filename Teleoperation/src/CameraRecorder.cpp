@@ -38,7 +38,7 @@ void CameraRecorder::init() {
     // }
 }
 
-void CameraRecorder::recordFrame(int index) {
+void CameraRecorder::recordFrame(int index, bool saveImg = true) {
     cv::Mat frame1, frame2;
     cap1 >> frame1;
     if (camIndex2 != -1){
@@ -51,11 +51,15 @@ void CameraRecorder::recordFrame(int index) {
 
     cv::imshow("frame1", frame1);
     frames1.push_back(frame1);
+
+    if (saveImg) {
+        cv::imwrite(imageFolder + "/cam1_" + std::to_string(index) + ".jpg", frame1);
+    }
     // write frame to jpeg in images folder
-    outFrame.open(imageFolder + "/cam1_" + std::to_string(index) + ".jpg", cv::VideoWriter::fourcc('X', 'V', 'I', 'D'), fps, cv::Size(frame1.cols, frame1.rows));
-    outFrame.write(frame1);
-    outFrame.release();
-    out1.write(frame1);
+    //outFrame.open(imageFolder + "/cam1_" + std::to_string(index) + ".jpg", cv::VideoWriter::fourcc('X', 'V', 'I', 'D'), fps, cv::Size(frame1.cols, frame1.rows));
+    //outFrame.write(frame1);
+    //outFrame.release();
+    //out1.write(frame1);
 
     if (camIndex2 != -1) {
         cv::imshow("frame2", frame2);
