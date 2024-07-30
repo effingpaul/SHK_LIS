@@ -1,10 +1,21 @@
 #include "include/CameraRecorder.h"
 
-CameraRecorder::CameraRecorder(int cam1, int cam2 = -1, int fps = 10, std::string folderName = "test") 
+CameraRecorder::CameraRecorder(int cam1, int cam2 = -1, int fps = 10, std::string folderName = "test", bool saveVideo = false) 
+/**
+ * @brief Construct a new Camera Recorder:: Camera Recorder object
+ * 
+ * @param cam1 camera port of the first camera
+ * @param cam2 camera port of the second camera (disabled by default = -1)
+ * @param fps frames per second
+ * @param folderName folder name to save the images and videos
+ * @param saveVideo flag to save a video of all the frames once recording is done
+ */
     : camIndex1(cam1), camIndex2(cam2), fps(fps), timeForEachFrame(1.0 / fps) {
     videoFolder = "videos";
     imageFolder = "images";
+    fps = fps;
     this->folderName = folderName;
+    this->saveVideo = saveVideo;
 }
 
 CameraRecorder::~CameraRecorder() {
@@ -25,17 +36,24 @@ void CameraRecorder::init() {
     }
 
     // create video and image subfolder in folderName
-    //videoFolder = folderName + "/" + videoFolder;
-    imageFolder = folderName + "/" + imageFolder;
-    //std::filesystem::create_directory(videoFolder);
-    std::filesystem::create_directory(imageFolder);
+    if (this->saveVideo) {
+        videoFolder = folderName + "/" + videoFolder;
+        std::filesystem::create_directory(videoFolder);
 
-    // int frameWidth = static_cast<int>(cap1.get(cv::CAP_PROP_FRAME_WIDTH));
-    // int frameHeight = static_cast<int>(cap1.get(cv::CAP_PROP_FRAME_HEIGHT));
-    // out1.open(videoFolder + "/output1.avi", cv::VideoWriter::fourcc('X', 'V', 'I', 'D'), fps, cv::Size(frameWidth, frameHeight));
-    // if (camIndex2 != -1) {
-    //     out2.open(videoFolder + "/output2.avi", cv::VideoWriter::fourcc('X', 'V', 'I', 'D'), fps, cv::Size(frameWidth, frameHeight));
-    // }
+        auto fourcc = cv::VideoWriter::fourcc('X', 'V', 'I', 'D');
+        int frameWidth = static_cast<int>(cap1.get(cv::CAP_PROP_FRAME_WIDTH));
+        int frameHeight = static_cast<int>(cap1.get(cv::CAP_PROP_FRAME_HEIGHT));
+        video1 = cv::VideoWriter(videoFolder + "/output1.avi",fourcc, fps, cv::Size(frameWidth, frameHeight));
+
+        if (camIndex2 != -1) {
+            frameWidth = static_cast<int>(cap2.get(cv::CAP_PROP_FRAME_WIDTH));
+            frameHeight = static_cast<int>(cap2.get(cv::CAP_PROP_FRAME_HEIGHT));
+            video2 = cv::VideoWriter(videoFolder + "/output2.avi",fourcc, fps, cv::Size(frameWidth, frameHeight));
+        }
+
+    }
+    imageFolder = folderName + "/" + imageFolder;
+    std::filesystem::create_directory(imageFolder);
 }
 
 void CameraRecorder::recordFrame(int index, bool saveImg = true) {
@@ -54,36 +72,35 @@ void CameraRecorder::recordFrame(int index, bool saveImg = true) {
 
     if (saveImg) {
         cv::imwrite(imageFolder + "/cam1_" + std::to_string(index) + ".jpg", frame1);
-    }
-    // write frame to jpeg in images folder
-    //outFrame.open(imageFolder + "/cam1_" + std::to_string(index) + ".jpg", cv::VideoWriter::fourcc('X', 'V', 'I', 'D'), fps, cv::Size(frame1.cols, frame1.rows));
-    //outFrame.write(frame1);
-    //outFrame.release();
-    //out1.write(frame1);
+        if (camIndex2 != -1) {
+            cv::imshow("frame2", frame2);
+            frames2.push_back(frame2);
 
-    if (camIndex2 != -1) {
-        cv::imshow("frame2", frame2);
-        frames2.push_back(frame2);
-        out2.write(frame2);
+            cv::imwrite(imageFolder + "/cam2_" + std::to_string(index) + ".jpg", frame2);
+        }
     }
 }
 
 void CameraRecorder::finalize() {
-    return;
-    // for (size_t i = 0; i < frames1.size(); ++i) {
-    //     std::string filename = imageFolder + "/frame1_" + std::to_string(i) + ".jpg";
-    //     cv::imwrite(filename, frames1[i]);
-    // }
+    // write the frames to video
+    if (this->saveVideo) {
+        for (size_t i = 0; i < frames1.size(); ++i) {
+            video1.write(frames1[i]);
+        }
+        video1.release();
 
-    // if (camIndex2 == -1) {
-    //     out1.release();
-    //     return;
-    // }else{
-    //     for (size_t i = 0; i < frames2.size(); ++i) {
-    //         std::string filename = imageFolder + "/frame2_" + std::to_string(i) + ".jpg";
-    //         cv::imwrite(filename, frames2[i]);
-    //     }
-// 
-    // out2.release();
-    // }
+        if (camIndex2 != -1) {
+            for (size_t i = 0; i < frames2.size(); ++i) {
+                video2.write(frames2[i]);
+            }
+            video2.release();
+        }
+    }
+
+    // delete cap and destroy windows
+    cap1.release();
+    if (camIndex2 != -1){
+        cap2.release();
+    }
+    cv::destroyAllWindows();
 }

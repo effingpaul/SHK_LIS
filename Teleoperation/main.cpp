@@ -87,13 +87,37 @@ void reset_data(TrackingData* arm, const char* endeffector, rai::Configuration* 
     arm->rotation_offset.append(initial_gripper_rot);
 }
 
+arr determineQFromEEPose(rai::Configuration C, arr EE_pose, arr qHome){
+
+    C.addFrame("home_dummy")->setShape(rai::ST_marker, {.1});
+    C.getFrame("home_dummy")->setPosition(EE_pose({0,2}));
+    C.getFrame("home_dummy")->setQuaternion(EE_pose({3,6}));
+    KOMO komo(C, 1., 1, 2, true);
+    
+    komo.setConfig(C, true);
+    komo.setTiming(1, 1, 1, 0);
+    komo.addObjective({}, FS_accumulatedCollisions, {}, OT_eq, {1e1});
+    komo.addObjective({}, FS_jointLimits, {}, OT_ineq, {1e1});
+    komo.addObjective({}, FS_qItself, {}, OT_sos, {1e-1}, qHome);                  
+    komo.addObjective({1.}, FS_positionDiff, {"l_gripper", "home_dummy"}, OT_eq, {1e1});
+    komo.addObjective({1.}, FS_quaternionDiff, {"l_gripper", "home_dummy"}, OT_eq, {1e1});
+    auto ret = NLP_Solver(komo.nlp(), 0).solve();
+    arr q = komo.getPath_qOrg();
+
+    arr result = q[0].copy();
+    cout << "result is: " << result << endl;
+    return result;
+}
+
 int main(int argc,char **argv)
 {
 
     // Timing
     const double delta = .2; // Timestep size for spline generation
     //OWN CODE
-    auto CAMERA_PORT = 4; //OWN CODE
+    auto CAMERA_PORT_1 = 4; 
+    auto CAMERA_PORT_2 = 10; //disabled: -1
+    bool SAVE_VIDEO = true;
     const int FPS = 20; // Desired frequency in frames per second
     const double tau = 1./FPS; // Desired time between frames
     //OWN CODE END
@@ -111,42 +135,30 @@ int main(int argc,char **argv)
     // Bot
     BotOp bot(C, true);
     bot.home(C);
+    arr q_default_home = bot.get_q();
     bot.gripperMove(rai::_left, .079);
     #if USE_BOTH_ARMS
         bot.gripperMove(rai::_right, .079);
     #endif
 
+    // OWN CODE
+    // define home pose in q space
     arr qHome = {-0.276413, 0.251156, -0.393057, -1.67559, 0.630542, 1.55408, 0.0252891}; //from an old recorded trajectory
-    bot.moveTo({qHome}, {3.}, true);
+    // This can be used to define a new home pose in EE space
+    qHome = determineQFromEEPose(C, {0.243944, 0.326473, 1.02048, -0.951066, -0.044951, -0.305564, 0.00908615}, q_default_home);
+
+    cout << "Moving to home pose: " << qHome << endl;
+
+    bot.moveTo({qHome}, {.25}, true);
 
     while(bot.getTimeToEnd()>0.){
         bot.sync(C,0);
     }
     bot.sync(C, 0);
 
+    // END OWN CODE
     arr last_komo = bot.get_q();
     arr q_dot_ref = bot.get_qDot();
-
-
-    // move to this EE pose
-    // [0.243944, 0.326473, 1.02048] [-0.951066, -0.044951, -0.305564, 0.00908615]
-
-    // C.addFrame("home_dummy")->setShape(rai::ST_marker, {.1});
-    // C.getFrame("home_dummy")->setPosition({0.243944, 0.326473, 1.02048});
-    // C.getFrame("home_dummy")->setQuaternion({-0.951066, -0.044951, -0.305564, 0.00908615});
-    // KOMO komo(C, 1., 1, 2, true);
-    // 
-    // komo.setConfig(C, true);
-    // komo.setTiming(1, 1, 1, 0);
-    // komo.addObjective({}, FS_accumulatedCollisions, {}, OT_eq, {1e1});
-    // komo.addObjective({}, FS_jointLimits, {}, OT_ineq, {1e1});
-    // komo.addObjective({}, FS_qItself, {}, OT_sos, {1e-1}, qHome);                  
-    // komo.addObjective({1.}, FS_positionDiff, {"l_gripper", "home_dummy"}, OT_eq, {1e1});
-    // komo.addObjective({1.}, FS_quaternionDiff, {"l_gripper", "home_dummy"}, OT_eq, {1e1});
-    // auto ret = NLP_Solver(komo.nlp(), 0).solve();
-    // arr q = komo.getPath_qOrg();
-    // // print q 
-    // cout << q << endl;
 
     // OWN CODE
     // INITIALIZE RECORDING STUFF
@@ -156,7 +168,7 @@ int main(int argc,char **argv)
     std::filesystem::create_directory(folder_name);
 
     //init camera
-    CameraRecorder recorder(CAMERA_PORT, -1, FPS, folder_name); // camera port, second camera port, FPS
+    CameraRecorder recorder(CAMERA_PORT_1, CAMERA_PORT_2, FPS, folder_name, SAVE_VIDEO); // camera port, second camera port, FPS
     recorder.init();
     auto frameNumber = 1;
 
@@ -228,7 +240,6 @@ int main(int argc,char **argv)
         // OWN CODE
         recorder.recordFrame(frameNumber++, moving);
         // immediatly after recording the frame, we log the EE pose
-        // print hello world
         if (moving){
             arr l_gripper_pos = C.getFrame("l_gripper")->getPosition();
             arr l_gripper_quat = C.getFrame("l_gripper")->getQuaternion();
@@ -326,5 +337,12 @@ int main(int argc,char **argv)
             std::this_thread::sleep_for(sleep_duration);
         }
     }
+
+    // OWN CODE
+    // finalize recording
+    recorder.finalize();
+    poses_file.close();
+    // END OWN CODE
+
     return 0;
 }
