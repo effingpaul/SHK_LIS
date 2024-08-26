@@ -17,7 +17,7 @@ import cv2
 import time
 import math
 
-def convert_images_to_numpy_array(folder_path, startFrame=0, endFrame=0, summarize_frames=1, height=84, width=84):
+def convert_images_to_numpy_array(folder_path, startFrame=0, endFrame=0, summarize_frames=1, height=84, width=84, zoomIn=True):
     images = []
     
     for i in range(startFrame, endFrame+1, summarize_frames):
@@ -30,6 +30,12 @@ def convert_images_to_numpy_array(folder_path, startFrame=0, endFrame=0, summari
         if min(img.shape[0], img.shape[1]) != img.shape[1]:
             cutoff = (img.shape[1] - img.shape[0]) // 2
             img = img[:, cutoff:-cutoff]
+
+        # zoom image a bit onto center
+        if zoomIn:
+            cutoff = img.shape[0] // 6
+            img = img[cutoff:-cutoff, cutoff:-cutoff]
+
         # rescale images to height and width
         img = cv2.resize(img, (height, width))
 
@@ -137,12 +143,12 @@ def convert_poses_to_numpy_array(folder_path, startFrame=0, endFrame=0, summariz
             minValues[i] = min(minValues[i], label[i])
             maxValues[i] = max(maxValues[i], label[i])
 
-        if len(prior_label) == 0:
-            prior_label = label
-        for i in range(len(label)):
-            minDiff[i] = min(minDiff[i], label[i] - prior_label[i])
-            maxDiff[i] = max(maxDiff[i], label[i] - prior_label[i])
-        prior_label = label
+        # if len(prior_label) == 0:
+        #     prior_label = label
+        # for i in range(len(label)):
+        #     minDiff[i] = min(minDiff[i], label[i] - prior_label[i])
+        #     maxDiff[i] = max(maxDiff[i], label[i] - prior_label[i])
+        # prior_label = label
     
         labels.append(label)
 
@@ -161,12 +167,14 @@ def convert_poses_to_numpy_array(folder_path, startFrame=0, endFrame=0, summariz
                 labels[i][j] = (labels[i][j] - minValues[j]) / (maxValues[j] - minValues[j])
     
 
-    # redefine all labels as the difference between the current and the prior label
-    prior_label = []
+    # redefine all labels as the difference between the current and the next label
+    next_label = []
     for i in range(len(labels)):
+        if i == len(labels)-1:
+            next_label = labels[i]
+        else:
+            next_label = labels[i+1]
         label = labels[i]
-        if len(prior_label) == 0:
-            prior_label = label
         
         tmp_label = [0, 0, 0, 0, 0, 0, 0]
         if use_quat:
@@ -174,16 +182,16 @@ def convert_poses_to_numpy_array(folder_path, startFrame=0, endFrame=0, summariz
                 tmp_label[i] = label[i]
             
 
-            label[3:] = quaternion_division(label[3:], prior_label[3:])
+            label[3:] = quaternion_division(next_label[3:], label[3:])
             for i in range(3):
-                label[i] = label[i] - prior_label[i]
+                label[i] = next_label[i] - label[i]
             print(label)
         else:
             for i in range(6):
                 # the actions are actually only the diffs in poses
                 tmp_label[i] = label[i]
-                label[i] = label[i] - prior_label[i]
-        prior_label = tmp_label
+                label[i] = next_label[i] - label[i]
+
 
     # add up all lables in the summarize_frames 
     new_labels = []
@@ -201,6 +209,16 @@ def convert_poses_to_numpy_array(folder_path, startFrame=0, endFrame=0, summariz
         new_labels.append(label)
 
     labels = new_labels
+
+
+    # define minDiff and maxDiff as the minimum and maximum values found in this new array
+    for i in range(len(labels)):
+        k = 6
+        if use_quat:
+            k = 7
+        for j in range(k):
+            minDiff[j] = min(minDiff[j], labels[i][j])
+            maxDiff[j] = max(maxDiff[j], labels[i][j])
 
     #print max and min array to a file in the folder
     with open(folder_path+"/min_max_values.txt", "w") as f:
@@ -280,9 +298,15 @@ def pickle_the_data(images, labels, folder_path):
     # 2. empty
     # 3. labels
     # 4. rewards (set to 0)
-    # each of these has another dimension "trajectories" that is of size one for now
+    # each of these has another dimension "trajectories" that is determined bz the length of images and labels first dimension
 
-    data = [[images], [[]], [labels], [np.zeros(len(labels))]]
+    # create zero numpy array for rewards of dimension num_trajectories and in the secodn dim alwazs the number of frames of the respective trajectory
+    rewards = []
+    for i in range(len(images)):
+        rewards.append(np.zeros(len(labels[i])))
+    data = [images, [[]], labels, rewards]
+
+    # data = [[images], [[]], [labels], [np.zeros(len(labels))]]
 
     with open(folder_path+"/expert_demos.pkl", "wb") as f:
         pickle.dump(data, f)
@@ -292,7 +316,12 @@ def read_pickled_data(folder_path):
     # this method tries to read the pickled data and shows one of the recovered images annotated with the corresponding label
     with open(folder_path+"/expert_demos.pkl", "rb") as f:
         data = pickle.load(f)
+        print(len(data ))
+        print(len(data[0]))
+        print(len(data[1]))
         print(data[0][0].shape)
+        print(data[0][1].shape)
+        print(data[0][2].shape)
         
         expert_demo, _, expert_demo_labels, rewards = data
 
@@ -322,20 +351,36 @@ def read_pickled_data(folder_path):
 
 
 if __name__ == "__main__":
-    folder_path = "recordings_1717521458"
-    num_frames = get_number_of_frames(folder_path)
-    startFrame = 22
-    endFrame = 320
-    summarize_frames = 8 # this is the number of frames that are combined to one label (all the n labels are added up while the first image is the input)
+    folder_for_export = "export_for_fish"
+    list_of_recordings_folders  = ["recordings_1723925966_success_real", "recordings_1723926147_success_real", "recordings_1723926333_success_real"]
 
-    startFrame = min(startFrame, num_frames)
-    endFrame = min(endFrame, num_frames)
+    total_labels = []
+    total_images = []
+    for folder_path in list_of_recordings_folders:
+        # find file with lowest number named after "cam1_{number}.jpg"
+        startFrame = 0
+        while not os.path.isfile(os.path.join(folder_path + "/images", "cam1_"+str(startFrame)+".jpg")):
+            startFrame += 1
+        print("Start frame: ", startFrame)
+        endFrame = startFrame
+        while os.path.isfile(os.path.join(folder_path + "/images", "cam1_"+str(endFrame)+".jpg")):
+            endFrame += 1
+        endFrame -= 1
+        print("End frame: ", endFrame)
+        num_frames = endFrame - startFrame + 1
+        summarize_frames = 10 # this is the number of frames that are combined to one label (all the n labels are added up while the first image is the input)
 
-    labels = convert_poses_to_numpy_array(folder_path, startFrame, endFrame, summarize_frames, use_quat=True, normalize=False)
-    
-    images = convert_images_to_numpy_array(folder_path, startFrame, endFrame, summarize_frames, 84, 84)
-    pickle_the_data(images, labels, folder_path)
-    read_pickled_data(folder_path)
+        labels = convert_poses_to_numpy_array(folder_path, 0, num_frames-1, summarize_frames, use_quat=True, normalize=False)
+        # dont save first label as it may contain idle actions
+        #labels = labels[1:]
+        total_labels.append(labels)
+
+        images = convert_images_to_numpy_array(folder_path, startFrame, endFrame, summarize_frames, 84, 84, True)
+        # dont save first image as it may contain idle actions
+        #images = images[1:]
+        total_images.append(images)
+    pickle_the_data(total_images, total_labels, folder_for_export)
+    read_pickled_data(folder_for_export)
 
 
 

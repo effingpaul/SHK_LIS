@@ -116,9 +116,9 @@ int main(int argc,char **argv)
     const double delta = .2; // Timestep size for spline generation
     //OWN CODE
     auto CAMERA_PORT_1 = 4; 
-    auto CAMERA_PORT_2 = 10; //disabled: -1
+    auto CAMERA_PORT_2 = -1; //disabled: -1
     bool SAVE_VIDEO = true;
-    const int FPS = 20; // Desired frequency in frames per second
+    const int FPS = 10; // Desired frequency in frames per second
     const double tau = 1./FPS; // Desired time between frames
     //OWN CODE END
     const std::chrono::milliseconds interval(static_cast<int>(1000.0 * tau));
@@ -136,7 +136,7 @@ int main(int argc,char **argv)
     BotOp bot(C, true);
     bot.home(C);
     arr q_default_home = bot.get_q();
-    bot.gripperMove(rai::_left, .079);
+    bot.gripperMove(rai::_left, .008);
     #if USE_BOTH_ARMS
         bot.gripperMove(rai::_right, .079);
     #endif
@@ -145,7 +145,7 @@ int main(int argc,char **argv)
     // define home pose in q space
     arr qHome = {-0.276413, 0.251156, -0.393057, -1.67559, 0.630542, 1.55408, 0.0252891}; //from an old recorded trajectory
     // This can be used to define a new home pose in EE space
-    qHome = determineQFromEEPose(C, {0.243944, 0.326473, 1.02048, -0.951066, -0.044951, -0.305564, 0.00908615}, q_default_home);
+    qHome = determineQFromEEPose(C, {0.142046, 0.341525, 0.91808, -0.934759, -0.0301513, -0.351251, -0.0440278}, q_default_home);
 
     cout << "Moving to home pose: " << qHome << endl;
 
@@ -180,7 +180,12 @@ int main(int argc,char **argv)
     cout << "Press enter to start teleoperation" << endl;
     std::cin.get();
 
-    bot.gripperClose(rai::_left);
+    //bot.gripperClose(rai::_left);
+    // file to write min max torques to
+    std::ofstream torques_file;
+    torques_file.open(folder_name + "/min_max_torques.txt");
+    arr min_torques = {100, 100, 100, 100, 100, 100, 100};
+    arr max_torques = {-100, -100, -100, -100, -100, -100, -100};
     // END OWN CODE
 
 
@@ -243,6 +248,16 @@ int main(int argc,char **argv)
         if (moving){
             arr l_gripper_pos = C.getFrame("l_gripper")->getPosition();
             arr l_gripper_quat = C.getFrame("l_gripper")->getQuaternion();
+            arr tau = bot.get_tauExternal();
+            // update min max torques
+            for (int i = 0; i < 7; i++){
+                if (tau(i) < min_torques(i)){
+                    min_torques(i) = tau(i);
+                }
+                if (tau(i) > max_torques(i)){
+                    max_torques(i) = tau(i);
+                }
+            }
             poses_file << l_gripper_pos << " " << l_gripper_quat << std::endl;
         }
         // END OWN CODE
@@ -342,6 +357,9 @@ int main(int argc,char **argv)
     // finalize recording
     recorder.finalize();
     poses_file.close();
+    torques_file << "min: " << min_torques << std::endl;
+    torques_file << "max: " << max_torques << std::endl;
+    torques_file.close();
     // END OWN CODE
 
     return 0;
